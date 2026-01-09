@@ -18,9 +18,29 @@ void VMInit(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread)
 jvmtiEnv* _env = NULL;
 jlong _id = 0;
 
+static void beginStackTrace(jboolean failed, jboolean biased, const void* userData) {
+  printf("Begin stack-trace: failed: %d, biased: %d, userData: %p\n", failed, biased, userData);
+}
+
+static void endStackTrace(const void* userData) {
+  printf("End stack-trace: userData: %p\n\n", userData);
+}
+
+static jvmtiIterationControl stackFrame(jvmtiFrameType type, jmethodID methodID, jlocation loc, const void* userData) {
+  char* name;
+  char* signature;
+  char* generic;
+  jvmtiError err = (*_env)->GetMethodName(_env, methodID, &name, &signature, &generic);
+  if (err != JVMTI_ERROR_NONE) {
+    printf("error in GetMethodName\n");
+  }
+  printf("stack-frame, name: %s, signature: %s, generic%s\n", name, signature, generic);
+  return JVMTI_ITERATION_CONTINUE;
+}
+
 static void handler(int signo, siginfo_t* info, void* context) {
   jvmtiEnv* env = _env;
-  jvmtiError err = (*env)->RequestStackTrace(env, NULL, context, _id++);
+  jvmtiError err = (*env)->RequestStackTrace(env, NULL, context, &beginStackTrace, &endStackTrace, &stackFrame, NULL);
 }
 
 void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method) {
