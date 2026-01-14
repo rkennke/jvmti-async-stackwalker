@@ -9,6 +9,22 @@
 
 #define SIG SIGRTMIN
 
+enum jvmtiFrameType {
+  JVMTI_JAVA_FRAME,
+  JVMTI_NATIVE_FRAME
+};
+
+/*
+typedef void (JNICALL *jvmtiBeginStackTraceCallback)
+    (jboolean failed, jboolean biased, const void* user_data);
+
+typedef void (JNICALL *jvmtiEndStackTraceCallback)
+    (const void* user_data);
+
+typedef jvmtiIterationControl (JNICALL *jvmtiStackFrameCallback)
+    (jvmtiFrameType frame_type, jmethodID method, jlocation location, const void* user_data);
+*/
+
 //Callback method
 void VMInit(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread)
 {
@@ -17,6 +33,7 @@ void VMInit(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread)
 
 jvmtiEnv* _env = NULL;
 jlong _id = 0;
+jvmtiExtensionFunction _request_stack_trace = NULL;
 
 static void beginStackTrace(jboolean failed, jboolean biased, const void* userData) {
   printf("Begin stack-trace: failed: %d, biased: %d, userData: %p\n", failed, biased, userData);
@@ -26,7 +43,7 @@ static void endStackTrace(const void* userData) {
   printf("End stack-trace: userData: %p\n\n", userData);
 }
 
-static jvmtiIterationControl stackFrame(jvmtiFrameType type, jmethodID methodID, jlocation loc, const void* userData) {
+static jvmtiIterationControl stackFrame(enum jvmtiFrameType type, jmethodID methodID, jlocation loc, const void* userData) {
   char* name;
   char* signature;
   char* generic;
@@ -39,8 +56,12 @@ static jvmtiIterationControl stackFrame(jvmtiFrameType type, jmethodID methodID,
 }
 
 static void handler(int signo, siginfo_t* info, void* context) {
-  jvmtiEnv* env = _env;
-  jvmtiError err = (*env)->RequestStackTrace(env, NULL, context, &beginStackTrace, &endStackTrace, &stackFrame, NULL);
+  if (_request_stack_trace != NULL) {
+    jvmtiError err = _request_stack_trace(_env, NULL, context, &beginStackTrace, &endStackTrace, &stackFrame, NULL);
+    if (err != JVMTI_ERROR_NONE) {
+      printf("Error in RequestStackTrace: %d\n", err);
+    }
+  }
 }
 
 void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method) {
@@ -122,6 +143,33 @@ jint Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
   }
 
   _env = environment;
+
+  // Find extension functions.
+  jint extension_count;
+  jvmtiExtensionFunctionInfo* extensions;
+  error = (*_env)->GetExtensionFunctions(_env, &extension_count, &extensions);
+  if (error != JVMTI_ERROR_NONE) {
+    printf("Error in GetExtensionFunctions: %d\n", error);
+    return JNI_ERR;
+  }
+
+  for (jint i = 0; i < extension_count; i++) {
+    jvmtiExtensionFunctionInfo* ext_info = &extensions[i];
+    if (strcmp(ext_info->id, "com.sun.hotspot.functions.RequestStackTrace") == 0) {
+      _request_stack_trace = ext_info->func;
+    }
+    printf("Extension %d: id: %s, short description: %s\n", i, ext_info->id, ext_info->short_description);
+    for (jint param_id = 0; param_id < ext_info->param_count; param_id++) {
+      jvmtiParamInfo* param = &(ext_info->params[param_id]);
+      printf("  param: %d: name: %s\n", param_id, param->name);
+      (*_env)->Deallocate(_env, param->name);
+    }
+    (*_env)->Deallocate(_env, ext_info->id);
+    (*_env)->Deallocate(_env, ext_info->short_description);
+    (*_env)->Deallocate(_env, (unsigned char*)ext_info->params);
+    (*_env)->Deallocate(_env, (unsigned char*)ext_info->errors);
+  }
+  (*_env)->Deallocate(_env, (unsigned char*)extensions);
 
   // Setup JVMTI capabilities
   jvmtiCapabilities capabilities;
