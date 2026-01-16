@@ -18,6 +18,7 @@ void VMInit(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread)
 jvmtiEnv* _env = NULL;
 jlong _id = 0;
 jvmtiExtensionFunction _request_stack_trace = NULL;
+jvmtiExtensionFunction _init_request_stack_trace = NULL;
 
 static void handler(int signo, siginfo_t* info, void* context) {
   if (_request_stack_trace != NULL) {
@@ -122,6 +123,9 @@ jint Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
     if (strcmp(ext_info->id, "com.sun.hotspot.functions.RequestStackTrace") == 0) {
       _request_stack_trace = ext_info->func;
     }
+    if (strcmp(ext_info->id, "com.sun.hotspot.functions.InitializeRequestStackTrace") == 0) {
+      _init_request_stack_trace = ext_info->func;
+    }
     printf("Extension %d: id: %s, short description: %s\n", i, ext_info->id, ext_info->short_description);
     for (jint param_id = 0; param_id < ext_info->param_count; param_id++) {
       jvmtiParamInfo* param = &(ext_info->params[param_id]);
@@ -138,12 +142,17 @@ jint Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
   // Setup JVMTI capabilities
   jvmtiCapabilities capabilities;
   memset(&capabilities, 0, sizeof(capabilities));
-
   capabilities.can_generate_method_entry_events       = 1;
-  capabilities.can_request_stack_trace                = 1;
   error = (*environment)->AddCapabilities(environment, &capabilities);
   if (error != JNI_OK) {
     printf("error in AddCapabilities\n");
+  }
+
+  // Initialize requesting of stack-traces.
+  if (_init_request_stack_trace != NULL) {
+    _init_request_stack_trace(_env);
+  } else {
+    printf("Count not find InitializeRequestStackTrace extension function\n");
     return JNI_ERR;
   }
 
