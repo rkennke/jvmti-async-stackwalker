@@ -73,7 +73,7 @@ static void handler(int signo, siginfo_t* info, void* context) {
 
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
                             int cpu, int group_fd, unsigned long flags) {
-  return syscall(__NR_perf_event_open, hw_event, pid, cpu, group_fd, flags);
+  return syscall(SYS_perf_event_open, hw_event, pid, cpu, group_fd, flags);
 }
 
 void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method) {
@@ -102,6 +102,7 @@ void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID
     pe.size = sizeof(struct perf_event_attr);
     pe.config = PERF_COUNT_HW_CACHE_MISSES;
     pe.sample_period = 100000; // Sample every 100K cache misses
+    pe.sample_type = PERF_SAMPLE_IP;
     pe.disabled = 1;
     pe.exclude_kernel = 1;
     pe.exclude_hv = 1;
