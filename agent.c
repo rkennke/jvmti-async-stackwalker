@@ -4,6 +4,12 @@
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
+#include <linux/perf_event.h>
+#include <linux/hw_breakpoint.h>
+#include <sys/syscall.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "jvmti.h"
 #include "jni.h"
 
@@ -29,6 +35,11 @@ static void handler(int signo, siginfo_t* info, void* context) {
   }
 }
 
+static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
+                            int cpu, int group_fd, unsigned long flags) {
+  return syscall(SYS_perf_event_open, hw_event, pid, cpu, group_fd, flags);
+}
+
 void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method) {
   jvmtiError error;
   char* name_p;
@@ -48,43 +59,52 @@ void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID
       return;
     }
 
-    // Block timer temporarily.
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIG);
-    if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1) {
-      printf("error in sigprocmask\n");
-      return;
-    }
+    // Setup perf event for cache misses
+    struct perf_event_attr pe;
+    memset(&pe, 0, sizeof(struct perf_event_attr));
+    pe.type = PERF_TYPE_HARDWARE;
+    pe.size = sizeof(struct perf_event_attr);
+    pe.config = PERF_COUNT_HW_CACHE_MISSES;
+    pe.sample_period = 100000; // Sample every 100K cache misses
+    pe.sample_type = PERF_SAMPLE_IP;
+    pe.disabled = 1;
+    pe.exclude_kernel = 1;
+    pe.exclude_hv = 1;
 
-    // Create the timer.
-    timer_t timerid;
-    struct sigevent sev;
     pid_t thread_id = gettid();
-    sev.sigev_notify = SIGEV_THREAD_ID;
-    sev.sigev_signo = SIG;
-    sev.sigev_value.sival_ptr = jvmti_env;
-    ((int*) &sev.sigev_notify)[1] /* sev.sigev_notify_thread_id */ = thread_id;
-    if (timer_create(CLOCK_REALTIME, &sev, &timerid) < 0) {
-      printf("error in timer_create\n");
+    int perf_fd = perf_event_open(&pe, thread_id, -1, -1, 0);
+    if (perf_fd == -1) {
+      printf("error in perf_event_open: %s\n", strerror(errno));
       return;
     }
 
-    struct itimerspec its;
-    its.it_interval.tv_sec = 1;
-    its.it_interval.tv_nsec = 0;
-    its.it_value.tv_sec = 1;
-    its.it_value.tv_nsec = 1;
-    if (timer_settime(timerid, 0, &its, NULL) == -1) {
-      printf("error in timer_settime\n");
-    }
-
-    sleep(1);
-
-    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1) {
-      printf("error in sigprocmask");
+    // Configure perf event to send signals
+    struct f_owner_ex fown_ex;
+    fown_ex.type = F_OWNER_TID;
+    fown_ex.pid = thread_id;
+    if (fcntl(perf_fd, F_SETOWN_EX, &fown_ex) == -1) {
+      printf("error in F_SETOWN_EX: %s\n", strerror(errno));
+      close(perf_fd);
       return;
     }
+
+    if (fcntl(perf_fd, F_SETFL, O_ASYNC) == -1) {
+      printf("error in F_SETFL: %s\n", strerror(errno));
+      close(perf_fd);
+      return;
+    }
+
+    if (fcntl(perf_fd, F_SETSIG, SIG) == -1) {
+      printf("error in F_SETSIG: %s\n", strerror(errno));
+      close(perf_fd);
+      return;
+    }
+
+    // Enable the perf event
+    ioctl(perf_fd, PERF_EVENT_IOC_RESET, 0);
+    ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, 0);
+
+    printf("Cache-miss profiling enabled (sampling every 100K misses)\n");
 
     if ((*jvmti_env)->SetEventNotificationMode(jvmti_env, JVMTI_DISABLE,
 					       JVMTI_EVENT_METHOD_ENTRY, (jthread)NULL)) {
