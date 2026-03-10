@@ -41,19 +41,15 @@ static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
 }
 
 void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method) {
+}
+void ThreadStart(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread) {
   jvmtiError error;
-  char* name_p;
-  char* signature_p;
-  char* generic_p;
 
-  error = (*jvmti_env)->GetMethodName(jvmti_env, method, &name_p, &signature_p, &generic_p);
-
-  if (strcmp(name_p, "main") == 0) {
     // Establish signal handler.
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = handler;
-    sigemptyset(&sa.sa_mask);
+    sigfillset(&sa.sa_mask);
     if (sigaction(SIG, &sa, NULL) == -1) {
       printf("error in sigaction\n");
       return;
@@ -65,7 +61,7 @@ void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID
     pe.type = PERF_TYPE_HARDWARE;
     pe.size = sizeof(struct perf_event_attr);
     pe.config = PERF_COUNT_HW_CACHE_MISSES;
-    pe.sample_period = 100000; // Sample every 100K cache misses
+    pe.sample_period = 100000; // Sample every 100K cache-misses
     pe.sample_type = PERF_SAMPLE_IP;
     pe.disabled = 1;
     pe.exclude_kernel = 1;
@@ -111,7 +107,7 @@ void MethodEntry(jvmtiEnv* jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID
       printf("error in SetEventNotificationMode");
       return;
     }
-  }
+
 }
 
 jint Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
@@ -180,6 +176,7 @@ jint Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
   memset(&callbacks, 0, sizeof(callbacks));
   callbacks.VMInit = (void*) &VMInit;
   callbacks.MethodEntry = (void*) &MethodEntry;
+  callbacks.ThreadStart = (void*) &ThreadStart;
 
   error = (*environment)->SetEventCallbacks(environment, &callbacks, (jint) sizeof(callbacks));
   if (error != JNI_OK) {
@@ -196,6 +193,12 @@ jint Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
   }
   error = (*environment)->SetEventNotificationMode(environment, JVMTI_ENABLE,
 						   JVMTI_EVENT_METHOD_ENTRY, (jthread) NULL);
+  if (error != JNI_OK) {
+    printf("error in SetEventNotificationMode\n");
+    return JNI_ERR;
+  }
+  error = (*environment)->SetEventNotificationMode(environment, JVMTI_ENABLE,
+						   JVMTI_EVENT_THREAD_START, (jthread) NULL);
   if (error != JNI_OK) {
     printf("error in SetEventNotificationMode\n");
     return JNI_ERR;
