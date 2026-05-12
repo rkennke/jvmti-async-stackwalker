@@ -21,8 +21,11 @@ javac HelloWorld.java
 ## Running the example
 
 ```
-$JAVA_HOME/bin/java -XX:+FlightRecorder -XX:StartFlightRecording=filename=test.jfr,dumponexit=true  -agentpath:./agent.so HelloWorld
+$JAVA_HOME/bin/java "-XX:StartFlightRecording=filename=test.jfr,dumponexit=true,+jdk.StackTraceRequest#enabled=true" -agentpath:./agent.so HelloWorld
 ```
+
+The `+jdk.StackTraceRequest#enabled=true` setting is required because the `StackTraceRequest`
+JFR event is experimental and not enabled by default JFR profiles.
 
 Let the program run for a while, until a couple of dots have been printed. The stack-traces will
 be recorded in the resulting `test.jfr` file - watch out for `AsyncStackTrace` events.
